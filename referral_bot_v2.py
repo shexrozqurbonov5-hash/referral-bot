@@ -46,10 +46,10 @@ from aiogram.types import (
     Message,
     ReplyKeyboardMarkup,
 )
-
+import os
 # ====================== SOZLAMALAR (o'zingizniki bilan almashtiring) ======================
-BOT_TOKEN = "8896730822:AAFDaBJqhIkJMD2ExdxAtZ51MixMwJpvrhU"   # Tokenni hech kimga bermang!
-ADMIN_ID = 6860639975                               # Sizning Telegram ID raqamingiz (@userinfobot)
+BOT_TOKEN = os.getenv("BOT_TOKEN", "")   # Tokenni hech kimga bermang!
+ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))                               # Sizning Telegram ID raqamingiz (@userinfobot)
 MIN_WITHDRAW = 5000                                # Minimal yechib olish summasi (so'm)
 HOLD_DAYS = 1                                      # Obuna shuncha kun saqlanib tursa, pul tasdiqlanadi
 DB_PATH = "referral.db"
