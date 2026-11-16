@@ -25,7 +25,7 @@ Admin buyruqlari:
 Eslatma: bot reklama qilinadigan kanalda ADMIN bo'lishi kerak
 (obunani tekshirish uchun). Faqat ochiq (@username li) kanallar qo'llab-quvvatlanadi.
 """
-
+import os
 import asyncio
 import logging
 import sqlite3
