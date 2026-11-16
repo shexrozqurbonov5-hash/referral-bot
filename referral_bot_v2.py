@@ -46,13 +46,13 @@ from aiogram.types import (
     Message,
     ReplyKeyboardMarkup,
 )
-import os
+
 # ====================== SOZLAMALAR (o'zingizniki bilan almashtiring) ======================
-BOT_TOKEN = os.getenv("BOT_TOKEN", "")   # Tokenni hech kimga bermang!
-ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))                               # Sizning Telegram ID raqamingiz (@userinfobot)
+BOT_TOKEN = "8896730822:AAFDaBJqhIkJMD2ExdxAtZ51MixMwJpvrhU"   # Tokenni hech kimga bermang!
+ADMIN_ID = 6860639975                               # Sizning Telegram ID raqamingiz (@userinfobot)
 MIN_WITHDRAW = 5000                                # Minimal yechib olish summasi (so'm)
 HOLD_DAYS = 1                                      # Obuna shuncha kun saqlanib tursa, pul tasdiqlanadi
-DB_PATH = os.getenv("DB_PATH", "referral.db")
+DB_PATH = "referral.db"
 # ==========================================================================================
 
 logging.basicConfig(level=logging.INFO)
@@ -142,6 +142,29 @@ def user_add(uid: int, username: str | None, ref: int | None) -> bool:
             (uid, username, ref, now()),
         )
         return True
+
+
+def admin_change_balance(uid: int, amount: int):
+    with db() as con:
+        user = con.execute(
+            "SELECT balance FROM users WHERE user_id=?",
+            (uid,)
+        ).fetchone()
+
+        if not user:
+            return None
+
+        new_balance = user["balance"] + amount
+
+        if new_balance < 0:
+            return False
+
+        con.execute(
+            "UPDATE users SET balance=? WHERE user_id=?",
+            (new_balance, uid)
+        )
+
+        return new_balance
 
 
 def channels_active():
@@ -296,28 +319,36 @@ async def safe_send(bot: Bot, uid: int, text: str, **kwargs) -> None:
 
 
 # ---------------------------- Tugmalar ----------------------------
-def main_menu() -> ReplyKeyboardMarkup:
+
+def main_menu(is_admin_user=False) -> ReplyKeyboardMarkup:
+    keyboard = [
+        [KeyboardButton(text="👥 Do'stlarni taklif qilish")],
+        [KeyboardButton(text="📢 Kanallar"), KeyboardButton(text="💰 Balans")],
+        [KeyboardButton(text="💸 Yechib olish"), KeyboardButton(text="ℹ️ Qoidalar")],
+    ]
+
+    if is_admin_user:
+        keyboard.append([KeyboardButton(text="⚙️ Admin panel")])
+
     return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="👥 Do'stlarni taklif qilish")],
-            [KeyboardButton(text="📢 Kanallar"), KeyboardButton(text="💰 Balans")],
-            [KeyboardButton(text="💸 Yechib olish"), KeyboardButton(text="ℹ️ Qoidalar")],
-        ],
+        keyboard=keyboard,
         resize_keyboard=True,
     )
 
-
-def cancel_kb() -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text="❌ Bekor qilish")]], resize_keyboard=True
-    )
 
 
 class Withdraw(StatesGroup):
     card = State()
 
 
+class AdminBalance(StatesGroup):
+    add_user_id = State()
+    add_amount = State()
+    subtract_user_id = State()
+    subtract_amount = State()
+    check_user_id = State()
 RULES = (
+
     "ℹ️ Qoidalar\n\n"
     "• Siz do'stlaringizni o'z havolangiz orqali botga taklif qilasiz.\n"
     "• Do'stingiz «Kanallar» bo'limidagi kanalga obuna bo'lgan zahoti sizga pul yoziladi "
@@ -356,6 +387,132 @@ async def start(message: Message, command: CommandObject, state: FSMContext):
 async def rules(message: Message):
     await message.answer(RULES)
 
+
+
+@router.message(F.text == "⚙️ Admin panel")
+async def admin_panel(message: Message):
+    if not is_admin(message.from_user.id):
+        return
+
+    kb = ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="➕ Hisobga pul qo‘shish")],
+            [KeyboardButton(text="➖ Hisobdan pul olish")],
+            [KeyboardButton(text="👤 Balansni tekshirish")],
+            [KeyboardButton(text="🔙 Asosiy menyu")],
+        ],
+        resize_keyboard=True,
+    )
+
+    await message.answer("⚙️ Admin panel", reply_markup=kb)
+
+
+
+@router.message(F.text == "🔙 Asosiy menyu")
+async def back_to_main(message: Message):
+    await message.answer(
+        "Asosiy menyu:",
+        reply_markup=main_menu(is_admin(message.from_user.id))
+    )
+
+@router.message(F.text == "➕ Hisobga pul qo‘shish")
+async def admin_add_start(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+
+    await state.set_state(AdminBalance.add_user_id)
+    await message.answer(
+        "Pul qo‘shmoqchi bo‘lgan foydalanuvchining Telegram ID raqamini yuboring:"
+    )
+
+@router.message(AdminBalance.add_user_id)
+async def admin_add_get_user(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        await state.clear()
+        return
+
+    if not message.text.isdigit():
+        await message.answer("Faqat raqamli Telegram ID yuboring.")
+        return
+
+    uid = int(message.text)
+
+    if not user_stats(uid):
+        await message.answer("Foydalanuvchi topilmadi. U avval botni ishga tushirgan bo‘lishi kerak.")
+        return
+
+    await state.update_data(target_uid=uid)
+    await state.set_state(AdminBalance.add_amount)
+    await message.answer("Qancha pul qo‘shmoqchisiz? Summani so‘mda yuboring:")
+
+@router.message(AdminBalance.add_amount)
+async def admin_add_get_amount(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        await state.clear()
+        return
+
+    if not message.text.isdigit() or int(message.text) <= 0:
+        await message.answer("Summani musbat raqamda yuboring.")
+        return
+
+    amount = int(message.text)
+    data = await state.get_data()
+    uid = data["target_uid"]
+
+    new_balance = admin_change_balance(uid, amount)
+
+    if new_balance is None:
+        await message.answer("Foydalanuvchi topilmadi.")
+    else:
+        await message.answer(
+            f"✅ Foydalanuvchi ID: {uid}\n"
+            f"Qo‘shilgan pul: {fmt(amount)} so‘m\n"
+            f"Yangi balans: {fmt(new_balance)} so‘m"
+        )
+
+    await state.clear()
+
+@router.message(F.text == "👤 Balansni tekshirish")
+async def admin_check_start(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+
+    await state.set_state(AdminBalance.check_user_id)
+    await message.answer("Balansini tekshirmoqchi bo‘lgan foydalanuvchining Telegram ID raqamini yuboring:")
+
+
+@router.message(AdminBalance.check_user_id)
+async def admin_check_balance(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        await state.clear()
+        return
+
+    if not message.text.isdigit():
+        await message.answer("Faqat raqamli Telegram ID yuboring.")
+        return
+
+    uid = int(message.text)
+    stats = user_stats(uid)
+
+    with db() as con:
+        user = con.execute(
+            "SELECT username FROM users WHERE user_id=?",
+            (uid,)
+        ).fetchone()
+
+    if not user:
+        await message.answer("Bunday foydalanuvchi topilmadi.")
+    else:
+        username = user["username"] or "Username yo‘q"
+        await message.answer(
+            f"👤 Foydalanuvchi: {username}\n"
+            f"🆔 ID: {uid}\n"
+            f"💰 Tasdiqlangan balans: {fmt(stats['balance'])} so‘m\n"
+            f"⏳ Tekshiruvdagi pul: {fmt(stats['pending_sum'])} so‘m\n"
+            f"👥 Taklif qilgan do‘stlari: {stats['friends']} ta"
+        )
+
+    await state.clear()
 
 @router.message(F.text == "👥 Do'stlarni taklif qilish")
 async def invite(message: Message, bot: Bot):
@@ -454,7 +611,10 @@ async def balance(message: Message):
 @router.message(F.text == "❌ Bekor qilish")
 async def cancel(message: Message, state: FSMContext):
     await state.clear()
-    await message.answer("Bekor qilindi.", reply_markup=main_menu())
+    await message.answer(
+    "Bekor qilindi.",
+    reply_markup=main_menu(is_admin(message.from_user.id))
+)
 
 
 @router.message(F.text == "💸 Yechib olish")
@@ -485,13 +645,18 @@ async def withdraw_card(message: Message, state: FSMContext, bot: Bot):
     res = withdraw_create(message.from_user.id, card)
     await state.clear()
     if not res:
-        await message.answer("Tasdiqlangan balans yetarli emas.", reply_markup=main_menu())
+        await message.answer(
+    "Tasdiqlangan balans yetarli emas.",
+    reply_markup=main_menu(is_admin(message.from_user.id))
+)
+
+
         return
     wid, amount = res
     await message.answer(
         f"✅ So'rov #{wid} qabul qilindi: {fmt(amount)} so'm.\n"
         "Admin tekshirib, kartangizga o'tkazadi.",
-        reply_markup=main_menu(),
+        reply_markup=main_menu(is_admin(message.from_user.id)),
     )
     kb = InlineKeyboardMarkup(
         inline_keyboard=[
