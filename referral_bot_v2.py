@@ -52,7 +52,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN", "")   # Tokenni hech kimga bermang!
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))                               # Sizning Telegram ID raqamingiz (@userinfobot)
 MIN_WITHDRAW = 5000                                # Minimal yechib olish summasi (so'm)
 HOLD_DAYS = 1                                      # Obuna shuncha kun saqlanib tursa, pul tasdiqlanadi
-DB_PATH = "referral.db"
+DB_PATH = os.getenv("DB_PATH", "referral.db")
 # ==========================================================================================
 
 logging.basicConfig(level=logging.INFO)
