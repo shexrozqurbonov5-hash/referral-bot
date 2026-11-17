@@ -10,7 +10,7 @@ Model:
   - Shu muddatda do'st kanalni tark etsa, pul olib tashlanadi (jarima) va xabar yuboriladi.
   - Yechib olish faqat TASDIQLANGAN summadan mumkin.
   - Admin "To'landi" tugmasini bosganda, bot TO'LOVLAR KANALIGA xabar yuboradi
-    (foydalanuvchi nomi yashirilgan, karta raqami ko'rsatilmaydi).
+    (username ko'rsatiladi, karta raqami hech qachon ko'rsatilmaydi).
 
 Railway Variables (kodga yozilmaydi):
   BOT_TOKEN        BotFather bergan token
@@ -337,7 +337,8 @@ async def post_payout(bot: Bot, w) -> None:
         return
     with db() as con:
         row = con.execute("SELECT username FROM users WHERE user_id=?", (w["user_id"],)).fetchone()
-    who = mask_name(row["username"] if row else None, w["user_id"])
+    username = row["username"] if row else None
+    who = f"@{username}" if username else mask_name(None, w["user_id"])
     me = await bot.me()
     kb = InlineKeyboardMarkup(
         inline_keyboard=[[InlineKeyboardButton(text="🤖 Botga o'tish", url=f"https://t.me/{me.username}")]]
@@ -401,6 +402,7 @@ RULES = (
     "olib tashlanadi (jarima) va sizga xabar yuboriladi.\n"
     f"• Yechib olish faqat tasdiqlangan summadan mumkin. Minimal summa: {fmt(MIN_WITHDRAW)} so'm. "
     "Pul admin tomonidan kartaga o'tkaziladi.\n"
+    "• To'lov amalga oshirilgach, username'ingiz (karta raqamisiz) to'lovlar kanalida ko'rsatiladi.\n"
     "• Mukofotlar kanal egalari to'lovi hisobidan beriladi. "
     "Botga hech qanday pul kiritish talab qilinmaydi.\n"
     "• O'zingizni taklif qilish, soxta akkauntlar va aldov taqiqlanadi, "
