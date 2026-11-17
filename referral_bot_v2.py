@@ -394,6 +394,7 @@ def main_menu(is_admin_user: bool = False) -> ReplyKeyboardMarkup:
         [KeyboardButton(text="👥 Do'stlarni taklif qilish")],
         [KeyboardButton(text="📢 Kanallar"), KeyboardButton(text="💰 Balans")],
         [KeyboardButton(text="💸 Yechib olish"), KeyboardButton(text="ℹ️ Qoidalar")],
+        [KeyboardButton(text="💳 To'lovlar kanali")],
     ]
     if is_admin_user:
         keyboard.append([KeyboardButton(text="⚙️ Admin panel")])
@@ -515,7 +516,7 @@ async def admin_add_get_user(message: Message, state: FSMContext):
 
 
 @router.message(AdminBalance.add_amount)
-async def admin_add_get_amount(message: Message, state: FSMContext):
+async def admin_add_get_amount(message: Message, state: FSMContext, bot: Bot):
     if not is_admin(message.from_user.id):
         await state.clear()
         return
@@ -534,6 +535,12 @@ async def admin_add_get_amount(message: Message, state: FSMContext):
             f"✅ Foydalanuvchi ID: {uid}\n"
             f"Qo‘shilgan pul: {fmt(amount)} so‘m\n"
             f"Yangi balans: {fmt(new_balance)} so‘m"
+        )
+        await safe_send(
+            bot,
+            uid,
+            f"💰 Hisobingizga {fmt(amount)} so'm qo'shildi (admin tomonidan).\n"
+            f"Yangi balans: {fmt(new_balance)} so'm",
         )
     await state.clear()
 
@@ -566,7 +573,7 @@ async def admin_sub_get_user(message: Message, state: FSMContext):
 
 
 @router.message(AdminBalance.subtract_amount)
-async def admin_sub_get_amount(message: Message, state: FSMContext):
+async def admin_sub_get_amount(message: Message, state: FSMContext, bot: Bot):
     if not is_admin(message.from_user.id):
         await state.clear()
         return
@@ -587,6 +594,12 @@ async def admin_sub_get_amount(message: Message, state: FSMContext):
             f"✅ Foydalanuvchi ID: {uid}\n"
             f"Ayirilgan pul: {fmt(amount)} so‘m\n"
             f"Yangi balans: {fmt(new_balance)} so‘m"
+        )
+        await safe_send(
+            bot,
+            uid,
+            f"➖ Hisobingizdan {fmt(amount)} so'm yechildi (admin tomonidan).\n"
+            f"Yangi balans: {fmt(new_balance)} so'm",
         )
     await state.clear()
 
@@ -628,6 +641,21 @@ async def admin_check_balance(message: Message, state: FSMContext):
 
 
 # ---------------------------- Foydalanuvchi: taklif, kanallar, balans ----------------------------
+@router.message(F.text == "💳 To'lovlar kanali")
+async def payouts_channel(message: Message):
+    if not PAYOUT_CHANNEL or not isinstance(PAYOUT_CHANNEL, str):
+        await message.answer("To'lovlar kanali hozircha sozlanmagan.")
+        return
+    url = "https://t.me/" + PAYOUT_CHANNEL.lstrip("@")
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text="💳 To'lovlar kanaliga o'tish", url=url)]]
+    )
+    await message.answer(
+        "To'lovlar kanalida amalga oshirilgan barcha to'lovlarni ko'rishingiz mumkin 👇",
+        reply_markup=kb,
+    )
+
+
 @router.message(F.text == "👥 Do'stlarni taklif qilish")
 async def invite(message: Message, bot: Bot):
     user_add(message.from_user.id, message.from_user.username, None)
