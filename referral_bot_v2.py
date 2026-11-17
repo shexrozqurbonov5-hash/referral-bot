@@ -1,5 +1,5 @@
 """
-Taklif (referal) boti, 2-versiya.
+Taklif (referal) boti, 3-versiya.
 
 Model:
   - Kanal egasi sizga to'laydi, siz botga KANAL qo'shasiz.
@@ -9,28 +9,28 @@ Model:
     va yechib olish mumkin bo'ladi (xabar yuboriladi).
   - Shu muddatda do'st kanalni tark etsa, pul olib tashlanadi (jarima) va xabar yuboriladi.
   - Yechib olish faqat TASDIQLANGAN summadan mumkin.
-  - Foydalanuvchi botga hech qachon pul kiritmaydi.
+  - Admin "To'landi" tugmasini bosganda, bot TO'LOVLAR KANALIGA xabar yuboradi
+    (foydalanuvchi nomi yashirilgan, karta raqami ko'rsatilmaydi).
 
-O'rnatish:  pip install aiogram
-Ishga tushirish:  python referral_bot_v2.py
+Railway Variables (kodga yozilmaydi):
+  BOT_TOKEN        BotFather bergan token
+  ADMIN_ID         sizning Telegram ID raqamingiz
+  PAYOUT_CHANNEL   to'lovlar kanali, masalan @tolovlar_kanali (bot kanalda ADMIN bo'lishi kerak)
+  DB_PATH          baza fayli yo'li, Volume ulagach: /data/referral.db
 
 Admin buyruqlari:
   /addchannel @kanal SONI MUKOFOT   masalan: /addchannel @mening_kanalim 100 300
-        SONI    - nechta obunachi uchun to'langan
-        MUKOFOT - har bir obunachi uchun taklif qilgan odamga beriladigan summa (so'm)
   /channels                         kanallar ro'yxati
   /stopchannel ID                   kanalni to'xtatish
   /stat                             statistika
-
-Eslatma: bot reklama qilinadigan kanalda ADMIN bo'lishi kerak
-(obunani tekshirish uchun). Faqat ochiq (@username li) kanallar qo'llab-quvvatlanadi.
 """
-import os
+
 import asyncio
 import logging
+import os
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
@@ -47,13 +47,18 @@ from aiogram.types import (
     ReplyKeyboardMarkup,
 )
 
-# ====================== SOZLAMALAR (o'zingizniki bilan almashtiring) ======================
-BOT_TOKEN = os.getenv("BOT_TOKEN")   # Tokenni hech kimga bermang!
-ADMIN_ID = 6860639975                               # Sizning Telegram ID raqamingiz (@userinfobot)
-MIN_WITHDRAW = 5000                                # Minimal yechib olish summasi (so'm)
-HOLD_DAYS = 1                                      # Obuna shuncha kun saqlanib tursa, pul tasdiqlanadi
-DB_PATH = "referral.db"
-# ==========================================================================================
+# ====================== SOZLAMALAR ======================
+# Token va ID kodga yozilmaydi, Railway Variables'dan o'qiladi.
+BOT_TOKEN = os.getenv("BOT_TOKEN", "")
+ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
+_payout = os.getenv("PAYOUT_CHANNEL", "").strip()
+PAYOUT_CHANNEL = int(_payout) if _payout.lstrip("-").isdigit() else _payout  # "@kanal" yoki -100... ID
+DB_PATH = os.getenv("DB_PATH", "referral.db")
+
+MIN_WITHDRAW = 5000   # Minimal yechib olish summasi (so'm)
+HOLD_DAYS = 1         # Obuna shuncha kun saqlanib tursa, pul tasdiqlanadi
+UZ_TZ = timezone(timedelta(hours=5))  # O'zbekiston vaqti
+# =========================================================
 
 logging.basicConfig(level=logging.INFO)
 router = Router()
@@ -72,6 +77,15 @@ def is_admin(uid: int) -> bool:
     return uid == ADMIN_ID
 
 
+def mask_name(username: str | None, uid: int) -> str:
+    """To'lovlar kanali uchun nomni qisman yashiradi."""
+    if username:
+        if len(username) <= 3:
+            return f"@{username[0]}***"
+        return f"@{username[:2]}***{username[-1]}"
+    return f"ID ***{str(uid)[-3:]}"
+
+
 # ---------------------------- Ma'lumotlar bazasi ----------------------------
 @contextmanager
 def db():
@@ -85,6 +99,9 @@ def db():
 
 
 def db_init() -> None:
+    folder = os.path.dirname(DB_PATH)
+    if folder:
+        os.makedirs(folder, exist_ok=True)
     with db() as con:
         con.executescript(
             """
@@ -144,26 +161,22 @@ def user_add(uid: int, username: str | None, ref: int | None) -> bool:
         return True
 
 
-def admin_change_balance(uid: int, amount: int):
+def user_exists(uid: int) -> bool:
     with db() as con:
-        user = con.execute(
-            "SELECT balance FROM users WHERE user_id=?",
-            (uid,)
-        ).fetchone()
+        return con.execute("SELECT 1 FROM users WHERE user_id=?", (uid,)).fetchone() is not None
 
+
+def admin_change_balance(uid: int, amount: int):
+    """Tasdiqlangan balansni o'zgartiradi.
+    Yangi balans / None (foydalanuvchi yo'q) / False (balans yetmaydi) qaytaradi."""
+    with db() as con:
+        user = con.execute("SELECT balance FROM users WHERE user_id=?", (uid,)).fetchone()
         if not user:
             return None
-
         new_balance = user["balance"] + amount
-
         if new_balance < 0:
             return False
-
-        con.execute(
-            "UPDATE users SET balance=? WHERE user_id=?",
-            (new_balance, uid)
-        )
-
+        con.execute("UPDATE users SET balance=? WHERE user_id=?", (new_balance, uid))
         return new_balance
 
 
@@ -318,23 +331,51 @@ async def safe_send(bot: Bot, uid: int, text: str, **kwargs) -> None:
         logging.info("Xabar yuborib bo'lmadi: %s", uid)
 
 
-# ---------------------------- Tugmalar ----------------------------
+async def post_payout(bot: Bot, w) -> None:
+    """To'lov amalga oshgach, to'lovlar kanaliga xabar yuboradi (karta ko'rsatilmaydi)."""
+    if not PAYOUT_CHANNEL:
+        return
+    with db() as con:
+        row = con.execute("SELECT username FROM users WHERE user_id=?", (w["user_id"],)).fetchone()
+    who = mask_name(row["username"] if row else None, w["user_id"])
+    me = await bot.me()
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text="🤖 Botga o'tish", url=f"https://t.me/{me.username}")]]
+    )
+    text = (
+        "✅ To'lov amalga oshirildi\n\n"
+        f"👤 {who}\n"
+        f"💸 {fmt(w['amount'])} so'm yechib oldi\n"
+        f"🕐 {datetime.now(UZ_TZ).strftime('%d.%m.%Y %H:%M')}"
+    )
+    try:
+        await bot.send_message(PAYOUT_CHANNEL, text, reply_markup=kb)
+    except Exception:
+        logging.exception("To'lovlar kanaliga yuborib bo'lmadi")
+        await safe_send(
+            bot,
+            ADMIN_ID,
+            "⚠️ To'lovlar kanaliga xabar yuborib bo'lmadi. "
+            "PAYOUT_CHANNEL to'g'riligini va bot kanalda admin ekanini tekshiring.",
+        )
 
-def main_menu(is_admin_user=False) -> ReplyKeyboardMarkup:
+
+# ---------------------------- Tugmalar ----------------------------
+def main_menu(is_admin_user: bool = False) -> ReplyKeyboardMarkup:
     keyboard = [
         [KeyboardButton(text="👥 Do'stlarni taklif qilish")],
         [KeyboardButton(text="📢 Kanallar"), KeyboardButton(text="💰 Balans")],
         [KeyboardButton(text="💸 Yechib olish"), KeyboardButton(text="ℹ️ Qoidalar")],
     ]
-
     if is_admin_user:
         keyboard.append([KeyboardButton(text="⚙️ Admin panel")])
+    return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
 
+
+def cancel_kb() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
-        keyboard=keyboard,
-        resize_keyboard=True,
+        keyboard=[[KeyboardButton(text="❌ Bekor qilish")]], resize_keyboard=True
     )
-
 
 
 class Withdraw(StatesGroup):
@@ -347,8 +388,9 @@ class AdminBalance(StatesGroup):
     subtract_user_id = State()
     subtract_amount = State()
     check_user_id = State()
-RULES = (
 
+
+RULES = (
     "ℹ️ Qoidalar\n\n"
     "• Siz do'stlaringizni o'z havolangiz orqali botga taklif qilasiz.\n"
     "• Do'stingiz «Kanallar» bo'limidagi kanalga obuna bo'lgan zahoti sizga pul yoziladi "
@@ -379,7 +421,7 @@ async def start(message: Message, command: CommandObject, state: FSMContext):
         "2) Do'stlaringizga yuboring\n"
         "3) Ular kanallarga obuna bo'lsa, hisobingizga pul tushadi\n\n"
         "Batafsil qoidalar: «ℹ️ Qoidalar»",
-        reply_markup=main_menu(),
+        reply_markup=main_menu(is_admin(message.from_user.id)),
     )
 
 
@@ -388,12 +430,11 @@ async def rules(message: Message):
     await message.answer(RULES)
 
 
-
+# ---------------------------- Admin panel ----------------------------
 @router.message(F.text == "⚙️ Admin panel")
 async def admin_panel(message: Message):
     if not is_admin(message.from_user.id):
         return
-
     kb = ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="➕ Hisobga pul qo‘shish")],
@@ -403,64 +444,58 @@ async def admin_panel(message: Message):
         ],
         resize_keyboard=True,
     )
-
     await message.answer("⚙️ Admin panel", reply_markup=kb)
 
 
-
 @router.message(F.text == "🔙 Asosiy menyu")
-async def back_to_main(message: Message):
+async def back_to_main(message: Message, state: FSMContext):
+    await state.clear()
     await message.answer(
         "Asosiy menyu:",
-        reply_markup=main_menu(is_admin(message.from_user.id))
+        reply_markup=main_menu(is_admin(message.from_user.id)),
     )
 
+
+# --- Pul qo'shish ---
 @router.message(F.text == "➕ Hisobga pul qo‘shish")
 async def admin_add_start(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
-
     await state.set_state(AdminBalance.add_user_id)
-    await message.answer(
-        "Pul qo‘shmoqchi bo‘lgan foydalanuvchining Telegram ID raqamini yuboring:"
-    )
+    await message.answer("Pul qo‘shmoqchi bo‘lgan foydalanuvchining Telegram ID raqamini yuboring:")
+
 
 @router.message(AdminBalance.add_user_id)
 async def admin_add_get_user(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         await state.clear()
         return
-
-    if not message.text.isdigit():
+    text = message.text or ""
+    if not text.isdigit():
         await message.answer("Faqat raqamli Telegram ID yuboring.")
         return
-
-    uid = int(message.text)
-
-    if not user_stats(uid):
+    uid = int(text)
+    if not user_exists(uid):
         await message.answer("Foydalanuvchi topilmadi. U avval botni ishga tushirgan bo‘lishi kerak.")
         return
-
     await state.update_data(target_uid=uid)
     await state.set_state(AdminBalance.add_amount)
     await message.answer("Qancha pul qo‘shmoqchisiz? Summani so‘mda yuboring:")
+
 
 @router.message(AdminBalance.add_amount)
 async def admin_add_get_amount(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         await state.clear()
         return
-
-    if not message.text.isdigit() or int(message.text) <= 0:
+    text = message.text or ""
+    if not text.isdigit() or int(text) <= 0:
         await message.answer("Summani musbat raqamda yuboring.")
         return
-
-    amount = int(message.text)
+    amount = int(text)
     data = await state.get_data()
     uid = data["target_uid"]
-
     new_balance = admin_change_balance(uid, amount)
-
     if new_balance is None:
         await message.answer("Foydalanuvchi topilmadi.")
     else:
@@ -469,14 +504,67 @@ async def admin_add_get_amount(message: Message, state: FSMContext):
             f"Qo‘shilgan pul: {fmt(amount)} so‘m\n"
             f"Yangi balans: {fmt(new_balance)} so‘m"
         )
-
     await state.clear()
 
+
+# --- Pul ayirish ---
+@router.message(F.text == "➖ Hisobdan pul olish")
+async def admin_sub_start(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        return
+    await state.set_state(AdminBalance.subtract_user_id)
+    await message.answer("Hisobidan pul ayirmoqchi bo‘lgan foydalanuvchining Telegram ID raqamini yuboring:")
+
+
+@router.message(AdminBalance.subtract_user_id)
+async def admin_sub_get_user(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        await state.clear()
+        return
+    text = message.text or ""
+    if not text.isdigit():
+        await message.answer("Faqat raqamli Telegram ID yuboring.")
+        return
+    uid = int(text)
+    if not user_exists(uid):
+        await message.answer("Foydalanuvchi topilmadi.")
+        return
+    await state.update_data(target_uid=uid)
+    await state.set_state(AdminBalance.subtract_amount)
+    await message.answer("Qancha pul ayirmoqchisiz? Summani so‘mda yuboring:")
+
+
+@router.message(AdminBalance.subtract_amount)
+async def admin_sub_get_amount(message: Message, state: FSMContext):
+    if not is_admin(message.from_user.id):
+        await state.clear()
+        return
+    text = message.text or ""
+    if not text.isdigit() or int(text) <= 0:
+        await message.answer("Summani musbat raqamda yuboring.")
+        return
+    amount = int(text)
+    data = await state.get_data()
+    uid = data["target_uid"]
+    new_balance = admin_change_balance(uid, -amount)
+    if new_balance is None:
+        await message.answer("Foydalanuvchi topilmadi.")
+    elif new_balance is False:
+        await message.answer("Foydalanuvchining tasdiqlangan balansida buncha pul yo‘q.")
+    else:
+        await message.answer(
+            f"✅ Foydalanuvchi ID: {uid}\n"
+            f"Ayirilgan pul: {fmt(amount)} so‘m\n"
+            f"Yangi balans: {fmt(new_balance)} so‘m"
+        )
+    await state.clear()
+
+
+# --- Balansni tekshirish ---
 @router.message(F.text == "👤 Balansni tekshirish")
 async def admin_check_start(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
-
     await state.set_state(AdminBalance.check_user_id)
     await message.answer("Balansini tekshirmoqchi bo‘lgan foydalanuvchining Telegram ID raqamini yuboring:")
 
@@ -486,23 +574,17 @@ async def admin_check_balance(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         await state.clear()
         return
-
-    if not message.text.isdigit():
+    text = message.text or ""
+    if not text.isdigit():
         await message.answer("Faqat raqamli Telegram ID yuboring.")
         return
-
-    uid = int(message.text)
-    stats = user_stats(uid)
-
+    uid = int(text)
     with db() as con:
-        user = con.execute(
-            "SELECT username FROM users WHERE user_id=?",
-            (uid,)
-        ).fetchone()
-
+        user = con.execute("SELECT username FROM users WHERE user_id=?", (uid,)).fetchone()
     if not user:
         await message.answer("Bunday foydalanuvchi topilmadi.")
     else:
+        stats = user_stats(uid)
         username = user["username"] or "Username yo‘q"
         await message.answer(
             f"👤 Foydalanuvchi: {username}\n"
@@ -511,9 +593,10 @@ async def admin_check_balance(message: Message, state: FSMContext):
             f"⏳ Tekshiruvdagi pul: {fmt(stats['pending_sum'])} so‘m\n"
             f"👥 Taklif qilgan do‘stlari: {stats['friends']} ta"
         )
-
     await state.clear()
 
+
+# ---------------------------- Foydalanuvchi: taklif, kanallar, balans ----------------------------
 @router.message(F.text == "👥 Do'stlarni taklif qilish")
 async def invite(message: Message, bot: Bot):
     user_add(message.from_user.id, message.from_user.username, None)
@@ -612,9 +695,9 @@ async def balance(message: Message):
 async def cancel(message: Message, state: FSMContext):
     await state.clear()
     await message.answer(
-    "Bekor qilindi.",
-    reply_markup=main_menu(is_admin(message.from_user.id))
-)
+        "Bekor qilindi.",
+        reply_markup=main_menu(is_admin(message.from_user.id)),
+    )
 
 
 @router.message(F.text == "💸 Yechib olish")
@@ -646,11 +729,9 @@ async def withdraw_card(message: Message, state: FSMContext, bot: Bot):
     await state.clear()
     if not res:
         await message.answer(
-    "Tasdiqlangan balans yetarli emas.",
-    reply_markup=main_menu(is_admin(message.from_user.id))
-)
-
-
+            "Tasdiqlangan balans yetarli emas.",
+            reply_markup=main_menu(is_admin(message.from_user.id)),
+        )
         return
     wid, amount = res
     await message.answer(
@@ -674,7 +755,7 @@ async def withdraw_card(message: Message, state: FSMContext, bot: Bot):
     )
 
 
-# ---------------------------- Admin qismi ----------------------------
+# ---------------------------- Admin: to'lovni tasdiqlash ----------------------------
 @router.callback_query(F.data.startswith("wpaid:"))
 async def w_paid(call: CallbackQuery, bot: Bot):
     if not is_admin(call.from_user.id):
@@ -686,6 +767,7 @@ async def w_paid(call: CallbackQuery, bot: Bot):
         await call.answer("Bu so'rov allaqachon ko'rib chiqilgan.", show_alert=True)
         return
     await safe_send(bot, w["user_id"], f"✅ So'rov #{wid}: {fmt(w['amount'])} so'm kartangizga o'tkazildi.")
+    await post_payout(bot, w)  # to'lovlar kanaliga xabar
     await call.message.edit_text(call.message.text + "\n\n✅ TO'LANDI")
     await call.answer()
 
@@ -709,6 +791,7 @@ async def w_reject(call: CallbackQuery, bot: Bot):
     await call.answer()
 
 
+# ---------------------------- Admin buyruqlari ----------------------------
 @router.message(Command("addchannel"))
 async def add_channel(message: Message, command: CommandObject, bot: Bot):
     if not is_admin(message.from_user.id):
@@ -818,6 +901,8 @@ async def release_loop(bot: Bot) -> None:
 
 # ---------------------------- Ishga tushirish ----------------------------
 async def main():
+    if not BOT_TOKEN or not ADMIN_ID:
+        raise SystemExit("BOT_TOKEN va ADMIN_ID o'rnatilmagan (Railway Variables'ni tekshiring).")
     db_init()
     bot = Bot(BOT_TOKEN)
     dp = Dispatcher(storage=MemoryStorage())
