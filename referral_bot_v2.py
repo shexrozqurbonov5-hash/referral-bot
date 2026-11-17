@@ -331,6 +331,33 @@ async def safe_send(bot: Bot, uid: int, text: str, **kwargs) -> None:
         logging.info("Xabar yuborib bo'lmadi: %s", uid)
 
 
+async def notify_new_user(bot: Bot, user) -> None:
+    """Yangi foydalanuvchi qo'shilganda adminga xabar yuboradi."""
+    if is_admin(user.id):
+        return
+    with db() as con:
+        row = con.execute("SELECT referrer_id FROM users WHERE user_id=?", (user.id,)).fetchone()
+        total = con.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+        ref_text = "yo'q (havolasiz kirgan)"
+        if row and row["referrer_id"]:
+            ref = con.execute(
+                "SELECT username FROM users WHERE user_id=?", (row["referrer_id"],)
+            ).fetchone()
+            ref_name = f"@{ref['username']}" if ref and ref["username"] else "username yo'q"
+            ref_text = f"{ref_name} (ID {row['referrer_id']})"
+    username = f"@{user.username}" if user.username else "username yo'q"
+    await safe_send(
+        bot,
+        ADMIN_ID,
+        "🆕 Botga yangi foydalanuvchi qo'shildi\n\n"
+        f"👤 Ism: {user.full_name}\n"
+        f"🔗 Username: {username}\n"
+        f"🆔 ID: {user.id}\n"
+        f"👥 Taklif qilgan: {ref_text}\n\n"
+        f"📊 Jami foydalanuvchilar: {total} ta",
+    )
+
+
 async def post_payout(bot: Bot, w) -> None:
     """To'lov amalga oshgach, to'lovlar kanaliga xabar yuboradi (karta ko'rsatilmaydi)."""
     if not PAYOUT_CHANNEL:
@@ -412,10 +439,12 @@ RULES = (
 
 # ---------------------------- Foydalanuvchi qismi ----------------------------
 @router.message(CommandStart())
-async def start(message: Message, command: CommandObject, state: FSMContext):
+async def start(message: Message, command: CommandObject, state: FSMContext, bot: Bot):
     await state.clear()
     ref = int(command.args) if command.args and command.args.isdigit() else None
-    user_add(message.from_user.id, message.from_user.username, ref)
+    is_new = user_add(message.from_user.id, message.from_user.username, ref)
+    if is_new:
+        await notify_new_user(bot, message.from_user)
     await message.answer(
         "Assalomu alaykum! 👋\n\n"
         "Bu bot orqali do'stlaringizni kanallarga taklif qilib pul ishlashingiz mumkin.\n\n"
