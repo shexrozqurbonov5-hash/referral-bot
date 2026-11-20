@@ -1,3 +1,4 @@
+
 """
 Taklif (referal) boti, 3-versiya.
 
@@ -7,22 +8,9 @@ Model:
   - Do'st kanalga obuna bo'lgan zahoti taklif qilganga pul yoziladi (tekshiruvda).
   - HOLD_DAYS (1 kun) o'tgach, do'st hali kanalda bo'lsa, pul tasdiqlanadi
     va yechib olish mumkin bo'ladi (xabar yuboriladi).
-  - Shu muddatda do'st kanalni tark etsa, pul olib tashlanadi (jarima) va xabar yuboriladi.
+  - Shu muddatda do'st kanalni tark etsa, pul olib tashlanadi va xabar yuboriladi.
   - Yechib olish faqat TASDIQLANGAN summadan mumkin.
-  - Admin "To'landi" tugmasini bosganda, bot TO'LOVLAR KANALIGA xabar yuboradi
-    (username ko'rsatiladi, karta raqami hech qachon ko'rsatilmaydi).
-
-Railway Variables (kodga yozilmaydi):
-  BOT_TOKEN        BotFather bergan token
-  ADMIN_ID         sizning Telegram ID raqamingiz
-  PAYOUT_CHANNEL   to'lovlar kanali, masalan @tolovlar_kanali (bot kanalda ADMIN bo'lishi kerak)
-  DB_PATH          baza fayli yo'li, Volume ulagach: /data/referral.db
-
-Admin buyruqlari:
-  /addchannel @kanal SONI MUKOFOT   masalan: /addchannel @mening_kanalim 100 300
-  /channels                         kanallar ro'yxati
-  /stopchannel ID                   kanalni to'xtatish
-  /stat                             statistika
+  - Admin "To'landi" tugmasini bosganda, bot TO'LOVLAR KANALIGA xabar yuboradi.
 """
 
 import asyncio
@@ -48,20 +36,47 @@ from aiogram.types import (
 )
 
 # ====================== SOZLAMALAR ======================
-# Token va ID kodga yozilmaydi, Railway Variables'dan o'qiladi.
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 _payout = os.getenv("PAYOUT_CHANNEL", "").strip()
-PAYOUT_CHANNEL = int(_payout) if _payout.lstrip("-").isdigit() else _payout  # "@kanal" yoki -100... ID
+PAYOUT_CHANNEL = int(_payout) if _payout.lstrip("-").isdigit() else _payout
 DB_PATH = os.getenv("DB_PATH", "referral.db")
 
-MIN_WITHDRAW = 5000   # Minimal yechib olish summasi (so'm)
-HOLD_DAYS = 1         # Obuna shuncha kun saqlanib tursa, pul tasdiqlanadi
-UZ_TZ = timezone(timedelta(hours=5))  # O'zbekiston vaqti
+MIN_WITHDRAW = 5000
+HOLD_DAYS = 1
+UZ_TZ = timezone(timedelta(hours=5))
 # =========================================================
 
 logging.basicConfig(level=logging.INFO)
 router = Router()
+
+
+# ---------------------------- PREMIUM EMOJI ID'LARI ----------------------------
+EMOJI = {
+    "user": "5317006024517912643",       # 👤
+    "people": "5316740582654112585",     # 👥
+    "channel": "5217943819311389632",    # 📢
+    "money": "5059989537938211890",      # 💰
+    "withdraw": "5267027242440992339",   # 💸
+    "info": "5334544901428229844",       # ℹ️
+    "card": "5316523549366716514",       # 💳
+    "settings": "5350396951407895212",  # ⚙️
+    "plus": "5397916757333654639",       # ➕
+    "minus": "5382261056078881010",      # ➖
+    "check": "5282892142962811394",      # ✅
+    "cross": "5273914604752216432",      # ❌
+    "bot": "5327820601845369150",        # 🤖
+    "gift": "5427315847129478207",       # 🎁
+    "hourglass": "5213452215527677338",  # ⏳
+    "warning": "5269744182917866822",    # ⚠️
+    "new": "5866494420857131357",        # 🆕
+    "link": "5409257566939134596",       # 🔗
+    "id": "5334890573281114250",         # 🆔
+    "stats": "5231200819986047254",      # 📊
+    "clock": "5408910404732595664",      # 🕐
+    "hello": "5213124260414889588",      # 👋
+    "diamond": "5059923597305316725",    # 💎
+}
 
 
 # ---------------------------- Yordamchi ----------------------------
@@ -78,7 +93,6 @@ def is_admin(uid: int) -> bool:
 
 
 def mask_name(username: str | None, uid: int) -> str:
-    """To'lovlar kanali uchun nomni qisman yashiradi."""
     if username:
         if len(username) <= 3:
             return f"@{username[0]}***"
@@ -145,7 +159,6 @@ def db_init() -> None:
 
 
 def user_add(uid: int, username: str | None, ref: int | None) -> bool:
-    """Yangi foydalanuvchi qo'shadi. Yangi bo'lsa True qaytaradi."""
     with db() as con:
         if con.execute("SELECT 1 FROM users WHERE user_id=?", (uid,)).fetchone():
             return False
@@ -163,20 +176,24 @@ def user_add(uid: int, username: str | None, ref: int | None) -> bool:
 
 def user_exists(uid: int) -> bool:
     with db() as con:
-        return con.execute("SELECT 1 FROM users WHERE user_id=?", (uid,)).fetchone() is not None
+        return con.execute(
+            "SELECT 1 FROM users WHERE user_id=?", (uid,)
+        ).fetchone() is not None
 
 
 def admin_change_balance(uid: int, amount: int):
-    """Tasdiqlangan balansni o'zgartiradi.
-    Yangi balans / None (foydalanuvchi yo'q) / False (balans yetmaydi) qaytaradi."""
     with db() as con:
-        user = con.execute("SELECT balance FROM users WHERE user_id=?", (uid,)).fetchone()
+        user = con.execute(
+            "SELECT balance FROM users WHERE user_id=?", (uid,)
+        ).fetchone()
         if not user:
             return None
         new_balance = user["balance"] + amount
         if new_balance < 0:
             return False
-        con.execute("UPDATE users SET balance=? WHERE user_id=?", (new_balance, uid))
+        con.execute(
+            "UPDATE users SET balance=? WHERE user_id=?", (new_balance, uid)
+        )
         return new_balance
 
 
@@ -189,7 +206,9 @@ def channels_active():
 
 def channel_get(cid: int):
     with db() as con:
-        return con.execute("SELECT * FROM campaigns WHERE id=?", (cid,)).fetchone()
+        return con.execute(
+            "SELECT * FROM campaigns WHERE id=?", (cid,)
+        ).fetchone()
 
 
 def channel_add(channel: str, title: str, slots: int, reward: int) -> int:
@@ -203,10 +222,10 @@ def channel_add(channel: str, title: str, slots: int, reward: int) -> int:
 
 
 def referral_claim(uid: int, cid: int):
-    """Do'stning obunasini ro'yxatga oladi. (holat, taklif qilgan odam, mukofot) qaytaradi.
-    Pul darrov 'tekshiruvda' holatida yoziladi."""
     with db() as con:
-        u = con.execute("SELECT referrer_id FROM users WHERE user_id=?", (uid,)).fetchone()
+        u = con.execute(
+            "SELECT referrer_id FROM users WHERE user_id=?", (uid,)
+        ).fetchone()
         if not u or not u["referrer_id"]:
             return "no_ref", None, 0
         c = con.execute(
@@ -215,31 +234,36 @@ def referral_claim(uid: int, cid: int):
         if not c or c["slots_left"] <= 0:
             return "closed", None, 0
         if con.execute(
-            "SELECT 1 FROM referrals WHERE referred_id=? AND campaign_id=?", (uid, cid)
+            "SELECT 1 FROM referrals WHERE referred_id=? AND campaign_id=?",
+            (uid, cid),
         ).fetchone():
             return "exists", None, 0
-        release = (datetime.now() + timedelta(days=HOLD_DAYS)).isoformat(timespec="seconds")
+        release = (
+            datetime.now() + timedelta(days=HOLD_DAYS)
+        ).isoformat(timespec="seconds")
         con.execute(
-            "INSERT INTO referrals (referred_id, referrer_id, campaign_id, reward, created_at, release_at) "
+            "INSERT INTO referrals "
+            "(referred_id, referrer_id, campaign_id, reward, created_at, release_at) "
             "VALUES (?, ?, ?, ?, ?, ?)",
             (uid, u["referrer_id"], cid, c["reward"], now(), release),
         )
-        con.execute("UPDATE campaigns SET slots_left = slots_left - 1 WHERE id=?", (cid,))
+        con.execute(
+            "UPDATE campaigns SET slots_left = slots_left - 1 WHERE id=?", (cid,)
+        )
         return "ok", u["referrer_id"], c["reward"]
 
 
 def referrals_due():
     with db() as con:
         return con.execute(
-            "SELECT r.*, c.channel, c.title FROM referrals r JOIN campaigns c ON c.id = r.campaign_id "
+            "SELECT r.*, c.channel, c.title FROM referrals r "
+            "JOIN campaigns c ON c.id = r.campaign_id "
             "WHERE r.status='pending' AND r.release_at <= ?",
             (now(),),
         ).fetchall()
 
 
 def referral_finish(rid: int, still_member: bool) -> None:
-    """Obuna saqlangan bo'lsa pulni tasdiqlaydi (yechish mumkin),
-    chiqib ketgan bo'lsa pulni olib tashlaydi (jarima) va o'rinni qaytaradi."""
     with db() as con:
         r = con.execute(
             "SELECT * FROM referrals WHERE id=? AND status='pending'", (rid,)
@@ -247,13 +271,17 @@ def referral_finish(rid: int, still_member: bool) -> None:
         if not r:
             return
         if still_member:
-            con.execute("UPDATE referrals SET status='paid' WHERE id=?", (rid,))
+            con.execute(
+                "UPDATE referrals SET status='paid' WHERE id=?", (rid,)
+            )
             con.execute(
                 "UPDATE users SET balance = balance + ? WHERE user_id=?",
                 (r["reward"], r["referrer_id"]),
             )
         else:
-            con.execute("UPDATE referrals SET status='cancelled' WHERE id=?", (rid,))
+            con.execute(
+                "UPDATE referrals SET status='cancelled' WHERE id=?", (rid,)
+            )
             con.execute(
                 "UPDATE campaigns SET slots_left = slots_left + 1 WHERE id=?",
                 (r["campaign_id"],),
@@ -262,7 +290,9 @@ def referral_finish(rid: int, still_member: bool) -> None:
 
 def user_stats(uid: int):
     with db() as con:
-        u = con.execute("SELECT balance FROM users WHERE user_id=?", (uid,)).fetchone()
+        u = con.execute(
+            "SELECT balance FROM users WHERE user_id=?", (uid,)
+        ).fetchone()
         row = con.execute(
             "SELECT "
             "COALESCE(SUM(CASE WHEN status='pending' THEN reward END),0) AS pending_sum, "
@@ -274,23 +304,25 @@ def user_stats(uid: int):
             "SELECT COUNT(*) FROM users WHERE referrer_id=?", (uid,)
         ).fetchone()[0]
         return {
-            "balance": u["balance"] if u else 0,   # tasdiqlangan, yechish mumkin
-            "pending_sum": row["pending_sum"],     # tekshiruvda
+            "balance": u["balance"] if u else 0,
+            "pending_sum": row["pending_sum"],
             "paid_cnt": row["paid_cnt"],
             "friends": friends,
         }
 
 
 def withdraw_create(uid: int, card: str):
-    """Tasdiqlangan balansni yechib, so'rov yaratadi. Muvaffaqiyatli bo'lsa (id, summa) qaytaradi."""
     with db() as con:
-        u = con.execute("SELECT balance FROM users WHERE user_id=?", (uid,)).fetchone()
+        u = con.execute(
+            "SELECT balance FROM users WHERE user_id=?", (uid,)
+        ).fetchone()
         if not u or u["balance"] < MIN_WITHDRAW:
             return None
         amount = u["balance"]
         con.execute("UPDATE users SET balance = 0 WHERE user_id=?", (uid,))
         cur = con.execute(
-            "INSERT INTO withdrawals (user_id, amount, card, created_at) VALUES (?, ?, ?, ?)",
+            "INSERT INTO withdrawals (user_id, amount, card, created_at) "
+            "VALUES (?, ?, ?, ?)",
             (uid, amount, card, now()),
         )
         return cur.lastrowid, amount
@@ -304,9 +336,13 @@ def withdraw_finish(wid: int, paid: bool):
         if not w:
             return None
         if paid:
-            con.execute("UPDATE withdrawals SET status='paid' WHERE id=?", (wid,))
+            con.execute(
+                "UPDATE withdrawals SET status='paid' WHERE id=?", (wid,)
+            )
         else:
-            con.execute("UPDATE withdrawals SET status='rejected' WHERE id=?", (wid,))
+            con.execute(
+                "UPDATE withdrawals SET status='rejected' WHERE id=?", (wid,)
+            )
             con.execute(
                 "UPDATE users SET balance = balance + ? WHERE user_id=?",
                 (w["amount"], w["user_id"]),
@@ -316,7 +352,6 @@ def withdraw_finish(wid: int, paid: bool):
 
 # ---------------------------- Telegram tekshiruvi ----------------------------
 async def is_member(bot: Bot, channel: str, uid: int):
-    """True/False, tekshirib bo'lmasa None."""
     try:
         m = await bot.get_chat_member(channel, uid)
         return m.status in ("member", "administrator", "creator")
@@ -332,18 +367,24 @@ async def safe_send(bot: Bot, uid: int, text: str, **kwargs) -> None:
 
 
 async def notify_new_user(bot: Bot, user) -> None:
-    """Yangi foydalanuvchi qo'shilganda adminga xabar yuboradi."""
     if is_admin(user.id):
         return
     with db() as con:
-        row = con.execute("SELECT referrer_id FROM users WHERE user_id=?", (user.id,)).fetchone()
+        row = con.execute(
+            "SELECT referrer_id FROM users WHERE user_id=?", (user.id,)
+        ).fetchone()
         total = con.execute("SELECT COUNT(*) FROM users").fetchone()[0]
         ref_text = "yo'q (havolasiz kirgan)"
         if row and row["referrer_id"]:
             ref = con.execute(
-                "SELECT username FROM users WHERE user_id=?", (row["referrer_id"],)
+                "SELECT username FROM users WHERE user_id=?",
+                (row["referrer_id"],),
             ).fetchone()
-            ref_name = f"@{ref['username']}" if ref and ref["username"] else "username yo'q"
+            ref_name = (
+                f"@{ref['username']}"
+                if ref and ref["username"]
+                else "username yo'q"
+            )
             ref_text = f"{ref_name} (ID {row['referrer_id']})"
     username = f"@{user.username}" if user.username else "username yo'q"
     await safe_send(
@@ -359,16 +400,26 @@ async def notify_new_user(bot: Bot, user) -> None:
 
 
 async def post_payout(bot: Bot, w) -> None:
-    """To'lov amalga oshgach, to'lovlar kanaliga xabar yuboradi (karta ko'rsatilmaydi)."""
     if not PAYOUT_CHANNEL:
         return
     with db() as con:
-        row = con.execute("SELECT username FROM users WHERE user_id=?", (w["user_id"],)).fetchone()
+        row = con.execute(
+            "SELECT username FROM users WHERE user_id=?", (w["user_id"],)
+        ).fetchone()
     username = row["username"] if row else None
     who = f"@{username}" if username else mask_name(None, w["user_id"])
     me = await bot.me()
+
+    # Kanal postidagi tugma: qizil. Kanalda Premium emoji ikonkasiga
+    # qo'yilgan cheklov sababli bu tugmaga custom emoji qo'shilmagan.
     kb = InlineKeyboardMarkup(
-        inline_keyboard=[[InlineKeyboardButton(text="🤖 Botga o'tish", url=f"https://t.me/{me.username}")]]
+        inline_keyboard=[[
+            InlineKeyboardButton(
+                text="Botga o'tish",
+                url=f"https://t.me/{me.username}",
+                style="danger",
+            )
+        ]]
     )
     text = (
         "✅ To'lov amalga oshirildi\n\n"
@@ -403,7 +454,8 @@ def main_menu(is_admin_user: bool = False) -> ReplyKeyboardMarkup:
 
 def cancel_kb() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text="❌ Bekor qilish")]], resize_keyboard=True
+        keyboard=[[KeyboardButton(text="❌ Bekor qilish")]],
+        resize_keyboard=True,
     )
 
 
@@ -488,13 +540,14 @@ async def back_to_main(message: Message, state: FSMContext):
     )
 
 
-# --- Pul qo'shish ---
 @router.message(F.text == "➕ Hisobga pul qo‘shish")
 async def admin_add_start(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
     await state.set_state(AdminBalance.add_user_id)
-    await message.answer("Pul qo‘shmoqchi bo‘lgan foydalanuvchining Telegram ID raqamini yuboring:")
+    await message.answer(
+        "Pul qo‘shmoqchi bo‘lgan foydalanuvchining Telegram ID raqamini yuboring:"
+    )
 
 
 @router.message(AdminBalance.add_user_id)
@@ -508,7 +561,9 @@ async def admin_add_get_user(message: Message, state: FSMContext):
         return
     uid = int(text)
     if not user_exists(uid):
-        await message.answer("Foydalanuvchi topilmadi. U avval botni ishga tushirgan bo‘lishi kerak.")
+        await message.answer(
+            "Foydalanuvchi topilmadi. U avval botni ishga tushirgan bo‘lishi kerak."
+        )
         return
     await state.update_data(target_uid=uid)
     await state.set_state(AdminBalance.add_amount)
@@ -545,13 +600,14 @@ async def admin_add_get_amount(message: Message, state: FSMContext, bot: Bot):
     await state.clear()
 
 
-# --- Pul ayirish ---
 @router.message(F.text == "➖ Hisobdan pul olish")
 async def admin_sub_start(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
     await state.set_state(AdminBalance.subtract_user_id)
-    await message.answer("Hisobidan pul ayirmoqchi bo‘lgan foydalanuvchining Telegram ID raqamini yuboring:")
+    await message.answer(
+        "Hisobidan pul ayirmoqchi bo‘lgan foydalanuvchining Telegram ID raqamini yuboring:"
+    )
 
 
 @router.message(AdminBalance.subtract_user_id)
@@ -604,13 +660,14 @@ async def admin_sub_get_amount(message: Message, state: FSMContext, bot: Bot):
     await state.clear()
 
 
-# --- Balansni tekshirish ---
 @router.message(F.text == "👤 Balansni tekshirish")
 async def admin_check_start(message: Message, state: FSMContext):
     if not is_admin(message.from_user.id):
         return
     await state.set_state(AdminBalance.check_user_id)
-    await message.answer("Balansini tekshirmoqchi bo‘lgan foydalanuvchining Telegram ID raqamini yuboring:")
+    await message.answer(
+        "Balansini tekshirmoqchi bo‘lgan foydalanuvchining Telegram ID raqamini yuboring:"
+    )
 
 
 @router.message(AdminBalance.check_user_id)
@@ -624,7 +681,9 @@ async def admin_check_balance(message: Message, state: FSMContext):
         return
     uid = int(text)
     with db() as con:
-        user = con.execute("SELECT username FROM users WHERE user_id=?", (uid,)).fetchone()
+        user = con.execute(
+            "SELECT username FROM users WHERE user_id=?", (uid,)
+        ).fetchone()
     if not user:
         await message.answer("Bunday foydalanuvchi topilmadi.")
     else:
@@ -648,7 +707,14 @@ async def payouts_channel(message: Message):
         return
     url = "https://t.me/" + PAYOUT_CHANNEL.lstrip("@")
     kb = InlineKeyboardMarkup(
-        inline_keyboard=[[InlineKeyboardButton(text="💳 To'lovlar kanaliga o'tish", url=url)]]
+        inline_keyboard=[[
+            InlineKeyboardButton(
+                text="To'lovlar kanaliga o'tish",
+                url=url,
+                style="danger",
+                icon_custom_emoji_id=EMOJI["card"],
+            )
+        ]]
     )
     await message.answer(
         "To'lovlar kanalida amalga oshirilgan barcha to'lovlarni ko'rishingiz mumkin 👇",
@@ -685,11 +751,27 @@ async def channels(message: Message):
     for c in items:
         kb = InlineKeyboardMarkup(
             inline_keyboard=[
-                [InlineKeyboardButton(text="📢 Kanalga o'tish", url=f"https://t.me/{c['channel'].lstrip('@')}")],
-                [InlineKeyboardButton(text="✅ Tekshirish", callback_data=f"check:{c['id']}")],
+                [
+                    InlineKeyboardButton(
+                        text="Kanalga o'tish",
+                        url=f"https://t.me/{c['channel'].lstrip('@')}",
+                        style="danger",
+                        icon_custom_emoji_id=EMOJI["channel"],
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        text="Tekshirish",
+                        callback_data=f"check:{c['id']}",
+                        style="danger",
+                        icon_custom_emoji_id=EMOJI["check"],
+                    )
+                ],
             ]
         )
-        await message.answer(f"{c['title'] or c['channel']}", reply_markup=kb)
+        await message.answer(
+            f"{c['title'] or c['channel']}", reply_markup=kb
+        )
 
 
 @router.callback_query(F.data.startswith("check:"))
@@ -704,15 +786,19 @@ async def check_sub(call: CallbackQuery, bot: Bot):
 
     st = await is_member(bot, c["channel"], uid)
     if st is None:
-        await call.answer("Tekshirib bo'lmadi. Keyinroq urinib ko'ring.", show_alert=True)
+        await call.answer(
+            "Tekshirib bo'lmadi. Keyinroq urinib ko'ring.", show_alert=True
+        )
         return
     if not st:
-        await call.answer("Siz hali kanalga obuna bo'lmagansiz.", show_alert=True)
+        await call.answer(
+            "Siz hali kanalga obuna bo'lmagansiz.", show_alert=True
+        )
         return
 
     status, referrer, reward = referral_claim(uid, cid)
     if status == "ok":
-        await call.answer("✅ Obuna tasdiqlandi. Rahmat!", show_alert=True)
+        await call.answer("Obuna tasdiqlandi. Rahmat!", show_alert=True)
         await safe_send(
             bot,
             referrer,
@@ -723,9 +809,13 @@ async def check_sub(call: CallbackQuery, bot: Bot):
             f"Agar {HOLD_DAYS} kun ichida kanalni tark etsa, -{fmt(reward)} so'm jarima bo'ladi.",
         )
     elif status == "exists":
-        await call.answer("Bu kanal allaqachon hisobga olingan.", show_alert=True)
+        await call.answer(
+            "Bu kanal allaqachon hisobga olingan.", show_alert=True
+        )
     elif status == "closed":
-        await call.answer("Bu kanal uchun obunachi yig'ish yopilgan.", show_alert=True)
+        await call.answer(
+            "Bu kanal uchun obunachi yig'ish yopilgan.", show_alert=True
+        )
     else:
         await call.answer(
             "Siz taklif havolasi orqali kelmagansiz, shuning uchun hech kimga mukofot yozilmaydi. "
@@ -782,7 +872,9 @@ async def withdraw_start(message: Message, state: FSMContext):
 async def withdraw_card(message: Message, state: FSMContext, bot: Bot):
     card = message.text.replace(" ", "")
     if not (card.isdigit() and len(card) == 16):
-        await message.answer("Karta raqami 16 ta raqamdan iborat bo'lishi kerak. Qaytadan yozing.")
+        await message.answer(
+            "Karta raqami 16 ta raqamdan iborat bo'lishi kerak. Qaytadan yozing."
+        )
         return
     res = withdraw_create(message.from_user.id, card)
     await state.clear()
@@ -798,18 +890,36 @@ async def withdraw_card(message: Message, state: FSMContext, bot: Bot):
         "Admin tekshirib, kartangizga o'tkazadi.",
         reply_markup=main_menu(is_admin(message.from_user.id)),
     )
+
     kb = InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text="✅ To'landi", callback_data=f"wpaid:{wid}"),
-                InlineKeyboardButton(text="❌ Rad etish", callback_data=f"wreject:{wid}"),
+                InlineKeyboardButton(
+                    text="To'landi",
+                    callback_data=f"wpaid:{wid}",
+                    style="danger",
+                    icon_custom_emoji_id=EMOJI["check"],
+                ),
+                InlineKeyboardButton(
+                    text="Rad etish",
+                    callback_data=f"wreject:{wid}",
+                    style="danger",
+                    icon_custom_emoji_id=EMOJI["cross"],
+                ),
             ]
         ]
     )
-    who = f"@{message.from_user.username}" if message.from_user.username else f"ID {message.from_user.id}"
+    who = (
+        f"@{message.from_user.username}"
+        if message.from_user.username
+        else f"ID {message.from_user.id}"
+    )
     await bot.send_message(
         ADMIN_ID,
-        f"💸 Yechib olish #{wid}\nFoydalanuvchi: {who}\nSumma: {fmt(amount)} so'm\nKarta: {card}",
+        f"💸 Yechib olish #{wid}\n"
+        f"Foydalanuvchi: {who}\n"
+        f"Summa: {fmt(amount)} so'm\n"
+        f"Karta: {card}",
         reply_markup=kb,
     )
 
@@ -823,10 +933,16 @@ async def w_paid(call: CallbackQuery, bot: Bot):
     wid = int(call.data.split(":")[1])
     w = withdraw_finish(wid, True)
     if not w:
-        await call.answer("Bu so'rov allaqachon ko'rib chiqilgan.", show_alert=True)
+        await call.answer(
+            "Bu so'rov allaqachon ko'rib chiqilgan.", show_alert=True
+        )
         return
-    await safe_send(bot, w["user_id"], f"✅ So'rov #{wid}: {fmt(w['amount'])} so'm kartangizga o'tkazildi.")
-    await post_payout(bot, w)  # to'lovlar kanaliga xabar
+    await safe_send(
+        bot,
+        w["user_id"],
+        f"✅ So'rov #{wid}: {fmt(w['amount'])} so'm kartangizga o'tkazildi.",
+    )
+    await post_payout(bot, w)
     await call.message.edit_text(call.message.text + "\n\n✅ TO'LANDI")
     await call.answer()
 
@@ -839,7 +955,9 @@ async def w_reject(call: CallbackQuery, bot: Bot):
     wid = int(call.data.split(":")[1])
     w = withdraw_finish(wid, False)
     if not w:
-        await call.answer("Bu so'rov allaqachon ko'rib chiqilgan.", show_alert=True)
+        await call.answer(
+            "Bu so'rov allaqachon ko'rib chiqilgan.", show_alert=True
+        )
         return
     await safe_send(
         bot,
@@ -857,7 +975,10 @@ async def add_channel(message: Message, command: CommandObject, bot: Bot):
         return
     parts = (command.args or "").split()
     if len(parts) != 3 or not parts[1].isdigit() or not parts[2].isdigit():
-        await message.answer("Format: /addchannel @kanal SONI MUKOFOT\nMasalan: /addchannel @mening_kanalim 100 300")
+        await message.answer(
+            "Format: /addchannel @kanal SONI MUKOFOT\n"
+            "Masalan: /addchannel @mening_kanalim 100 300"
+        )
         return
     channel = parts[0] if parts[0].startswith("@") else "@" + parts[0]
     slots, reward = int(parts[1]), int(parts[2])
@@ -866,16 +987,23 @@ async def add_channel(message: Message, command: CommandObject, bot: Bot):
         me = await bot.me()
         member = await bot.get_chat_member(channel, me.id)
         if member.status not in ("administrator", "creator"):
-            await message.answer("Bot bu kanalda admin emas. Avval botni kanalga admin qiling.")
+            await message.answer(
+                "Bot bu kanalda admin emas. Avval botni kanalga admin qiling."
+            )
             return
         chat = await bot.get_chat(channel)
     except (TelegramBadRequest, TelegramForbiddenError):
-        await message.answer("Kanal topilmadi yoki bot unga kira olmayapti. Username'ni va bot adminligini tekshiring.")
+        await message.answer(
+            "Kanal topilmadi yoki bot unga kira olmayapti. "
+            "Username'ni va bot adminligini tekshiring."
+        )
         return
 
     cid = channel_add(channel, chat.title or channel, slots, reward)
     await message.answer(
-        f"✅ Kanal #{cid} qo'shildi\nKanal: {channel}\nObunachi soni: {slots}\n"
+        f"✅ Kanal #{cid} qo'shildi\n"
+        f"Kanal: {channel}\n"
+        f"Obunachi soni: {slots}\n"
         f"Taklif qilganga mukofot: {fmt(reward)} so'm / obunachi"
     )
 
@@ -885,12 +1013,15 @@ async def list_channels(message: Message):
     if not is_admin(message.from_user.id):
         return
     with db() as con:
-        rows = con.execute("SELECT * FROM campaigns ORDER BY id DESC LIMIT 30").fetchall()
+        rows = con.execute(
+            "SELECT * FROM campaigns ORDER BY id DESC LIMIT 30"
+        ).fetchall()
     if not rows:
         await message.answer("Kanallar yo'q.")
         return
     lines = [
-        f"#{r['id']} {r['channel']} | qolgan: {r['slots_left']} | {fmt(r['reward'])} so'm | "
+        f"#{r['id']} {r['channel']} | qolgan: {r['slots_left']} | "
+        f"{fmt(r['reward'])} so'm | "
         + ("faol" if r["active"] else "to'xtatilgan")
         for r in rows
     ]
@@ -905,7 +1036,9 @@ async def stop_channel(message: Message, command: CommandObject):
         await message.answer("Format: /stopchannel ID")
         return
     with db() as con:
-        con.execute("UPDATE campaigns SET active=0 WHERE id=?", (int(command.args),))
+        con.execute(
+            "UPDATE campaigns SET active=0 WHERE id=?", (int(command.args),)
+        )
     await message.answer("Kanal to'xtatildi.")
 
 
@@ -915,10 +1048,18 @@ async def stat(message: Message):
         return
     with db() as con:
         users = con.execute("SELECT COUNT(*) FROM users").fetchone()[0]
-        confirmed = con.execute("SELECT COALESCE(SUM(balance),0) FROM users").fetchone()[0]
-        pend = con.execute("SELECT COALESCE(SUM(reward),0) FROM referrals WHERE status='pending'").fetchone()[0]
-        paid_out = con.execute("SELECT COALESCE(SUM(amount),0) FROM withdrawals WHERE status='paid'").fetchone()[0]
-        wait = con.execute("SELECT COUNT(*) FROM withdrawals WHERE status='pending'").fetchone()[0]
+        confirmed = con.execute(
+            "SELECT COALESCE(SUM(balance),0) FROM users"
+        ).fetchone()[0]
+        pend = con.execute(
+            "SELECT COALESCE(SUM(reward),0) FROM referrals WHERE status='pending'"
+        ).fetchone()[0]
+        paid_out = con.execute(
+            "SELECT COALESCE(SUM(amount),0) FROM withdrawals WHERE status='paid'"
+        ).fetchone()[0]
+        wait = con.execute(
+            "SELECT COUNT(*) FROM withdrawals WHERE status='pending'"
+        ).fetchone()[0]
     await message.answer(
         f"📊 Statistika\n"
         f"Foydalanuvchilar: {users}\n"
@@ -929,14 +1070,14 @@ async def stat(message: Message):
     )
 
 
-# ---------------------------- Fon vazifasi: muddati tugagan obunalarni tekshirish ----------------------------
+# ---------------------------- Fon vazifasi ----------------------------
 async def release_loop(bot: Bot) -> None:
     while True:
         try:
             for r in referrals_due():
                 st = await is_member(bot, r["channel"], r["referred_id"])
                 if st is None:
-                    continue  # tekshirib bo'lmadi, keyingi safar
+                    continue
                 referral_finish(r["id"], st)
                 name = r["title"] or r["channel"]
                 if st:
@@ -955,13 +1096,15 @@ async def release_loop(bot: Bot) -> None:
                     )
         except Exception:
             logging.exception("release_loop xatosi")
-        await asyncio.sleep(600)  # har 10 daqiqada
+        await asyncio.sleep(600)
 
 
 # ---------------------------- Ishga tushirish ----------------------------
 async def main():
     if not BOT_TOKEN or not ADMIN_ID:
-        raise SystemExit("BOT_TOKEN va ADMIN_ID o'rnatilmagan (Railway Variables'ni tekshiring).")
+        raise SystemExit(
+            "BOT_TOKEN va ADMIN_ID o'rnatilmagan (Railway Variables'ni tekshiring)."
+        )
     db_init()
     bot = Bot(BOT_TOKEN)
     dp = Dispatcher(storage=MemoryStorage())
